@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +21,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,8 +29,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.v2ray.ang.AngApplication
+import com.v2ray.ang.ui.main.MainAction
+import com.v2ray.ang.ui.main.MainRepository
+import com.v2ray.ang.ui.main.MainViewModel
 import com.v2ray.ang.ui.screen.ActiveServerUi
-import com.v2ray.ang.ui.screen.ConfigItemUi
 import com.v2ray.ang.ui.screen.ConfigProtocol
 import com.v2ray.ang.ui.screen.ConnectionState
 import com.v2ray.ang.ui.screen.HomeScreen
@@ -37,6 +42,8 @@ import com.v2ray.ang.ui.screen.SettingScreen
 import com.v2ray.ang.ui.screen.demoAdvancedItems
 import com.v2ray.ang.ui.screen.demoAppearanceItems
 import com.v2ray.ang.ui.screen.demoConnectionToggles
+import com.v2ray.ang.ui.screen.filterByProtocol
+import com.v2ray.ang.ui.screen.toConfigItemUi
 import com.v2ray.ang.ui.theme.BackgroundDark
 import com.v2ray.ang.ui.theme.PrimaryBlue
 import com.v2ray.ang.ui.theme.PrimaryBluePale
@@ -56,41 +63,49 @@ private enum class BottomTab(val label: String, val icon: ImageVector) {
 }
 
 /**
- * اکتیویتی اصلی UI جدید — نسخه‌ی نهایی‌تر از ComposeTestActivity، ولی این بار
- * هر سه صفحه رو با نوار پایین به هم وصل می‌کنه. همچنان با دیتای دمو کار می‌کنه؛
- * قدم بعدی وصل کردنش به ProfileManager/MmkvManager واقعیه.
+ * اکتیویتی اصلی UI جدید. صفحه‌ی کانفیگ‌ها (Profiles) الان به MainViewModel
+ * واقعی وصله - دقیقاً همون معماری‌ای که MainActivity قدیمی استفاده می‌کنه.
+ * Home و Settings هنوز با دیتای دمو کار می‌کنن؛ قدم بعدی وصل کردن اوناست.
  */
 class ComposeMainActivity : ComponentActivity() {
+
+    // دقیقاً همون الگوی MainActivity.kt - بدون Hilt، ساخت دستی با Factory
+    private val mainViewModel: MainViewModel by viewModels {
+        MainViewModel.Factory(application, MainRepository(application as AngApplication))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // دقیقاً همون کاری که MainActivity.onCreate می‌کنه
+        mainViewModel.onAction(MainAction.Initialize)
         setContent {
             V2MTheme {
-                V2MApp()
+                V2MApp(mainViewModel = mainViewModel)
             }
         }
     }
 }
 
 @Composable
-private fun V2MApp() {
+private fun V2MApp(mainViewModel: MainViewModel) {
     var selectedTab by remember { mutableStateOf(BottomTab.HOME) }
+
+    // TODO: این دو تا (connectionState دمو و demoConfigs) موقع وصل کردن Home
+    // به همین mainViewModel حذف میشن و جاش از uiState واقعی استفاده میشه.
     var connectionState by remember { mutableStateOf(ConnectionState.DISCONNECTED) }
     var selectedProtocol by remember { mutableStateOf(ConfigProtocol.ALL) }
 
-    // TODO: این‌ها رو با ProfileManager.getAllProfile() واقعی جایگزین کن
-    val demoConfigs = remember {
-        listOf(
-            ConfigItemUi("1", "🇩🇪", "Germany - Frankfurt", "vless · ws · tls", 98, isSelected = true),
-            ConfigItemUi("2", "🇳🇱", "Netherlands - Amsterdam", "vless · ws · tls", 116),
-            ConfigItemUi("3", "🇺🇸", "United States - New York", "vmess · ws · tls", 155),
-            ConfigItemUi("4", "🇸🇬", "Singapore", "vless · grpc · tls", 68),
-            ConfigItemUi("5", "🇯🇵", "Japan - Tokyo", "vmess · ws · tls", 120),
-        )
-    }
-    val filteredConfigs = remember(selectedProtocol, demoConfigs) {
-        if (selectedProtocol == ConfigProtocol.ALL) demoConfigs
-        else demoConfigs.filter { it.protocolLabel.startsWith(selectedProtocol.label.lowercase()) }
+    // ---- دیتای واقعی صفحه‌ی کانفیگ‌ها ----
+    val uiState by mainViewModel.uiState.collectAsState()
+    val realServers by mainViewModel
+        .serversForGroup(uiState.selectedGroupId)
+        .collectAsState()
+
+    val filteredConfigs = remember(selectedProtocol, realServers, uiState.selectedGuid) {
+        realServers
+            .filterByProtocol(selectedProtocol)
+            .map { it.toConfigItemUi(isSelected = it.guid == uiState.selectedGuid) }
     }
 
     Scaffold(
@@ -111,15 +126,15 @@ private fun V2MApp() {
                 ),
                 downloadBytes = "126.4 MB",
                 uploadBytes = "23.7 MB",
-                profileCount = demoConfigs.size,
-                groupCount = 3,
+                profileCount = realServers.size,
+                groupCount = uiState.groups.size,
                 onConnectToggle = {
+                    // TODO: قدم بعدی این رو به mainViewModel.onAction(MainAction.ToggleService) وصل کن
                     connectionState = when (connectionState) {
                         ConnectionState.DISCONNECTED -> ConnectionState.CONNECTING
                         ConnectionState.CONNECTING -> ConnectionState.CONNECTED
                         ConnectionState.CONNECTED -> ConnectionState.DISCONNECTED
                     }
-                    // TODO: اینجا VpnService واقعی رو start/stop کن
                 },
                 onOpenProfiles = { selectedTab = BottomTab.PROFILES },
                 onOpenGroups = { selectedTab = BottomTab.GROUPS },
@@ -132,8 +147,13 @@ private fun V2MApp() {
                 configs = filteredConfigs,
                 selectedProtocol = selectedProtocol,
                 onProtocolSelected = { selectedProtocol = it },
-                onConfigClick = { /* TODO: انتخاب/اتصال به این کانفیگ */ },
-                onConfigPing = { /* TODO: تست پینگ این کانفیگ */ },
+                onConfigClick = { config ->
+                    mainViewModel.onAction(MainAction.SelectServer(config.id))
+                },
+                onConfigPing = { config ->
+                    mainViewModel.onAction(MainAction.SelectServer(config.id))
+                    mainViewModel.onAction(MainAction.TestCurrentServer)
+                },
                 onAddConfig = { /* TODO: باز کردن صفحه‌ی افزودن کانفیگ */ },
                 onOpenMenu = { /* TODO: باز کردن drawer یا منو */ },
                 onSearch = { /* TODO: باز کردن سرچ */ },
