@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.v2ray.ang.AngApplication
+import com.v2ray.ang.AppConfig
 import com.v2ray.ang.extension.toastError
 import com.v2ray.ang.handler.LauncherManager
 import com.v2ray.ang.handler.SettingsManager
@@ -56,6 +57,8 @@ import com.v2ray.ang.ui.theme.PrimaryBluePale
 import com.v2ray.ang.ui.theme.SurfaceDark
 import com.v2ray.ang.ui.theme.TextDisabled
 import com.v2ray.ang.ui.theme.V2MTheme
+import com.v2ray.ang.util.LogUtil
+import com.v2ray.ang.util.Utils
 
 /**
  * تب‌های پایین صفحه. Groups فعلاً یه placeholder ساده‌ست چون
@@ -69,12 +72,12 @@ private enum class BottomTab(val label: String, val icon: ImageVector) {
 }
 
 /**
- * اکتیویتی اصلی UI جدید. دکمه‌ی Connect الان دقیقاً همون منطق MainActivity.handleFabAction
- * رو پیاده می‌کنه: مجوز VpnService رو می‌گیره (اگه لازم باشه) و بعد سرویس واقعی رو
- * روشن/خاموش می‌کنه. صفحه‌ی کانفیگ‌ها هم به MainViewModel واقعی وصله.
+ * اکتیویتی اصلی UI جدید. دکمه‌ی Connect منطق واقعی VpnService.prepare + LauncherManager
+ * رو داره. دکمه‌ی سه‌نقطه‌ی صفحه‌ی کانفیگ‌ها الان از کلیپ‌بورد Import می‌کنه (لینک اشتراک
+ * یا کانفیگ رو کپی کن، بزن رو سه‌نقطه).
  *
  * TODO باقی‌مونده: پرچم سرور فعال از SpeedtestManager.getRemoteIPInfo، آمار زنده‌ی
- * دانلود/آپلود، و وصل کردن سوییچ‌های تنظیمات.
+ * دانلود/آپلود، دکمه‌ی + جدا برای افزودن دستی، و وصل کردن سوییچ‌های تنظیمات.
  */
 class ComposeMainActivity : ComponentActivity() {
 
@@ -96,7 +99,8 @@ class ComposeMainActivity : ComponentActivity() {
             V2MTheme {
                 V2MApp(
                     mainViewModel = mainViewModel,
-                    onToggleConnection = { handleFabAction() }
+                    onToggleConnection = { handleFabAction() },
+                    onImportClipboard = { importClipboard() }
                 )
             }
         }
@@ -122,12 +126,23 @@ class ComposeMainActivity : ComponentActivity() {
         }
         LauncherManager.startService(this)
     }
+
+    // دقیقاً همون importClipboard تو MainActivity.kt
+    private fun importClipboard() {
+        try {
+            val text = Utils.getClipboard(this)
+            mainViewModel.onAction(MainAction.ImportBatchConfig(text))
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "Failed to import config from clipboard", e)
+        }
+    }
 }
 
 @Composable
 private fun V2MApp(
     mainViewModel: MainViewModel,
-    onToggleConnection: () -> Unit
+    onToggleConnection: () -> Unit,
+    onImportClipboard: () -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(BottomTab.HOME) }
     var selectedProtocol by remember { mutableStateOf(ConfigProtocol.ALL) }
@@ -192,11 +207,13 @@ private fun V2MApp(
                     mainViewModel.onAction(MainAction.SelectServer(config.id))
                     mainViewModel.onAction(MainAction.TestCurrentServer)
                 },
-                onAddConfig = { /* TODO: باز کردن صفحه‌ی افزودن کانفیگ */ },
+                // فعلاً دکمه‌ی + هم همون کار Import از کلیپ‌بورد رو می‌کنه؛
+                // بعداً می‌تونیم یه صفحه‌ی جدا برای افزودن دستی/QR بسازیم
+                onAddConfig = onImportClipboard,
                 onOpenMenu = { /* TODO: باز کردن drawer یا منو */ },
                 onSearch = { /* TODO: باز کردن سرچ */ },
                 onFilter = { /* TODO: باز کردن فیلتر */ },
-                onMoreOptions = { /* TODO: منوی گزینه‌های بیشتر */ }
+                onMoreOptions = onImportClipboard
             )
 
             BottomTab.GROUPS -> GroupsPlaceholder(modifier = Modifier.padding(padding))
