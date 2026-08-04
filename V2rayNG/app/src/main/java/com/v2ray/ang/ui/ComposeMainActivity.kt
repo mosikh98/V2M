@@ -1,9 +1,12 @@
 package com.v2ray.ang.ui
 
+import android.app.Activity.RESULT_OK
+import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -30,6 +33,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.v2ray.ang.AngApplication
+import com.v2ray.ang.extension.toastError
+import com.v2ray.ang.handler.LauncherManager
+import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.ui.main.MainAction
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.main.MainViewModel
@@ -63,40 +69,69 @@ private enum class BottomTab(val label: String, val icon: ImageVector) {
 }
 
 /**
- * اکتیویتی اصلی UI جدید. صفحه‌ی کانفیگ‌ها (Profiles) الان به MainViewModel
- * واقعی وصله - دقیقاً همون معماری‌ای که MainActivity قدیمی استفاده می‌کنه.
- * Home و Settings هنوز با دیتای دمو کار می‌کنن؛ قدم بعدی وصل کردن اوناست.
+ * اکتیویتی اصلی UI جدید. دکمه‌ی Connect الان دقیقاً همون منطق MainActivity.handleFabAction
+ * رو پیاده می‌کنه: مجوز VpnService رو می‌گیره (اگه لازم باشه) و بعد سرویس واقعی رو
+ * روشن/خاموش می‌کنه. صفحه‌ی کانفیگ‌ها هم به MainViewModel واقعی وصله.
+ *
+ * TODO باقی‌مونده: پرچم سرور فعال از SpeedtestManager.getRemoteIPInfo، آمار زنده‌ی
+ * دانلود/آپلود، و وصل کردن سوییچ‌های تنظیمات.
  */
 class ComposeMainActivity : ComponentActivity() {
 
-    // دقیقاً همون الگوی MainActivity.kt - بدون Hilt، ساخت دستی با Factory
     private val mainViewModel: MainViewModel by viewModels {
         MainViewModel.Factory(application, MainRepository(application as AngApplication))
     }
 
+    // دقیقاً همون requestVpnPermission تو MainActivity.kt
+    private val requestVpnPermission =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (it.resultCode == RESULT_OK) startV2Ray()
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // دقیقاً همون کاری که MainActivity.onCreate می‌کنه
         mainViewModel.onAction(MainAction.Initialize)
         setContent {
             V2MTheme {
-                V2MApp(mainViewModel = mainViewModel)
+                V2MApp(
+                    mainViewModel = mainViewModel,
+                    onToggleConnection = { handleFabAction() }
+                )
             }
         }
+    }
+
+    // دقیقاً همون handleFabAction تو MainActivity.kt
+    private fun handleFabAction() {
+        if (mainViewModel.uiState.value.isRunning) {
+            LauncherManager.stopService(this)
+        } else if (SettingsManager.isVpnMode()) {
+            val intent = VpnService.prepare(this)
+            if (intent == null) startV2Ray() else requestVpnPermission.launch(intent)
+        } else {
+            startV2Ray()
+        }
+    }
+
+    // دقیقاً همون startV2Ray تو MainActivity.kt (بدون بخش مجوز شبکه‌ی محلی که پیچیدگی اضافه داره)
+    private fun startV2Ray() {
+        if (mainViewModel.uiState.value.selectedGuid.isNullOrEmpty()) {
+            toastError("یک کانفیگ رو اول از تب کانفیگ‌ها انتخاب کن")
+            return
+        }
+        LauncherManager.startService(this)
     }
 }
 
 @Composable
-private fun V2MApp(mainViewModel: MainViewModel) {
+private fun V2MApp(
+    mainViewModel: MainViewModel,
+    onToggleConnection: () -> Unit
+) {
     var selectedTab by remember { mutableStateOf(BottomTab.HOME) }
-
-    // TODO: این دو تا (connectionState دمو و demoConfigs) موقع وصل کردن Home
-    // به همین mainViewModel حذف میشن و جاش از uiState واقعی استفاده میشه.
-    var connectionState by remember { mutableStateOf(ConnectionState.DISCONNECTED) }
     var selectedProtocol by remember { mutableStateOf(ConfigProtocol.ALL) }
 
-    // ---- دیتای واقعی صفحه‌ی کانفیگ‌ها ----
     val uiState by mainViewModel.uiState.collectAsState()
     val realServers by mainViewModel
         .serversForGroup(uiState.selectedGroupId)
@@ -108,6 +143,12 @@ private fun V2MApp(mainViewModel: MainViewModel) {
             .map { it.toConfigItemUi(isSelected = it.guid == uiState.selectedGuid) }
     }
 
+    // سرور فعال برای کارت بالای صفحه‌ی خانه - بر اساس selectedGuid واقعی
+    val activeServerItem = remember(realServers, uiState.selectedGuid) {
+        realServers.firstOrNull { it.guid == uiState.selectedGuid }
+    }
+    val connectionState = if (uiState.isRunning) ConnectionState.CONNECTED else ConnectionState.DISCONNECTED
+
     Scaffold(
         containerColor = BackgroundDark,
         bottomBar = {
@@ -118,24 +159,21 @@ private fun V2MApp(mainViewModel: MainViewModel) {
             BottomTab.HOME -> HomeScreen(
                 modifier = Modifier.padding(padding),
                 connectionState = connectionState,
-                activeServer = ActiveServerUi(
-                    countryFlag = "🇩🇪",
-                    name = "Germany - Frankfurt",
-                    protocol = "vless · ws · tls",
-                    pingMs = 98
-                ),
-                downloadBytes = "126.4 MB",
-                uploadBytes = "23.7 MB",
+                activeServer = activeServerItem?.let { server ->
+                    val ui = server.toConfigItemUi(isSelected = true)
+                    ActiveServerUi(
+                        countryFlag = ui.countryFlag,
+                        name = ui.name,
+                        protocol = ui.protocolLabel,
+                        pingMs = ui.pingMs
+                    )
+                },
+                // TODO: آمار واقعی دانلود/آپلود - هنوز تو MainUiState فیلدی براش نیست
+                downloadBytes = "—",
+                uploadBytes = "—",
                 profileCount = realServers.size,
                 groupCount = uiState.groups.size,
-                onConnectToggle = {
-                    // TODO: قدم بعدی این رو به mainViewModel.onAction(MainAction.ToggleService) وصل کن
-                    connectionState = when (connectionState) {
-                        ConnectionState.DISCONNECTED -> ConnectionState.CONNECTING
-                        ConnectionState.CONNECTING -> ConnectionState.CONNECTED
-                        ConnectionState.CONNECTED -> ConnectionState.DISCONNECTED
-                    }
-                },
+                onConnectToggle = onToggleConnection,
                 onOpenProfiles = { selectedTab = BottomTab.PROFILES },
                 onOpenGroups = { selectedTab = BottomTab.GROUPS },
                 onOpenSettings = { selectedTab = BottomTab.SETTINGS },
