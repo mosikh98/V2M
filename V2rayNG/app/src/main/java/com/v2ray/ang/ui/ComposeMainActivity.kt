@@ -35,7 +35,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.extension.toastError
-import com.v2ray.ang.handler.LauncherManager
+import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.ui.main.MainAction
 import com.v2ray.ang.ui.main.MainRepository
