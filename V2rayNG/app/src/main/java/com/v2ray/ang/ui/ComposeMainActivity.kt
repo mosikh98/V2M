@@ -3,9 +3,6 @@ package com.v2ray.ang.ui
 import android.app.Activity.RESULT_OK
 import android.net.VpnService
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
@@ -34,9 +31,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
-import com.v2ray.ang.extension.toastError
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.extension.toastError
 import com.v2ray.ang.handler.SettingsManager
+import com.v2ray.ang.ui.base.HelperBaseComponentActivity
 import com.v2ray.ang.ui.main.MainAction
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.main.MainViewModel
@@ -44,6 +42,7 @@ import com.v2ray.ang.ui.screen.ActiveServerUi
 import com.v2ray.ang.ui.screen.ConfigProtocol
 import com.v2ray.ang.ui.screen.ConnectionState
 import com.v2ray.ang.ui.screen.HomeScreen
+import com.v2ray.ang.ui.screen.MoreMenuItem
 import com.v2ray.ang.ui.screen.ProfileScreen
 import com.v2ray.ang.ui.screen.SettingScreen
 import com.v2ray.ang.ui.screen.demoAdvancedItems
@@ -72,14 +71,15 @@ private enum class BottomTab(val label: String, val icon: ImageVector) {
 }
 
 /**
- * اکتیویتی اصلی UI جدید. دکمه‌ی Connect منطق واقعی VpnService.prepare + LauncherManager
- * رو داره. دکمه‌ی سه‌نقطه‌ی صفحه‌ی کانفیگ‌ها الان از کلیپ‌بورد Import می‌کنه (لینک اشتراک
- * یا کانفیگ رو کپی کن، بزن رو سه‌نقطه).
+ * اکتیویتی اصلی UI جدید. از HelperBaseComponentActivity ارث می‌بره تا رایگان
+ * launchQRCodeScanner و launchFileChooser رو داشته باشه (دقیقاً همون قابلیت‌هایی
+ * که MainActivity قدیمی استفاده می‌کنه). دکمه‌ی سه‌نقطه‌ی صفحه‌ی کانفیگ‌ها
+ * الان یه منوی کشویی واقعی با سه گزینه‌ست: کلیپ‌بورد، اسکن QR، فایل.
  *
  * TODO باقی‌مونده: پرچم سرور فعال از SpeedtestManager.getRemoteIPInfo، آمار زنده‌ی
- * دانلود/آپلود، دکمه‌ی + جدا برای افزودن دستی، و وصل کردن سوییچ‌های تنظیمات.
+ * دانلود/آپلود، و وصل کردن سوییچ‌های تنظیمات.
  */
-class ComposeMainActivity : ComponentActivity() {
+class ComposeMainActivity : HelperBaseComponentActivity() {
 
     private val mainViewModel: MainViewModel by viewModels {
         MainViewModel.Factory(application, MainRepository(application as AngApplication))
@@ -93,16 +93,21 @@ class ComposeMainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // این کلاس پایه خودش setContent رو صدا می‌زنه (از طریق ScreenContent زیر)،
+        // پس فقط کافیه دیتای اولیه رو لود کنیم - دقیقاً کاری که MainActivity.onCreate می‌کنه
         mainViewModel.onAction(MainAction.Initialize)
-        setContent {
-            V2MTheme {
-                V2MApp(
-                    mainViewModel = mainViewModel,
-                    onToggleConnection = { handleFabAction() },
-                    onImportClipboard = { importClipboard() }
-                )
-            }
+    }
+
+    @Composable
+    override fun ScreenContent() {
+        V2MTheme {
+            V2MApp(
+                mainViewModel = mainViewModel,
+                onToggleConnection = { handleFabAction() },
+                onImportClipboard = { importClipboard() },
+                onImportQrCode = { importQrCode() },
+                onImportFile = { importFile() }
+            )
         }
     }
 
@@ -136,13 +141,38 @@ class ComposeMainActivity : ComponentActivity() {
             LogUtil.e(AppConfig.TAG, "Failed to import config from clipboard", e)
         }
     }
+
+    // دقیقاً همون importQRcode تو MainActivity.kt - از launchQRCodeScanner ارث‌بری‌شده استفاده می‌کنه
+    private fun importQrCode() {
+        launchQRCodeScanner { scanResult ->
+            if (scanResult != null) {
+                mainViewModel.onAction(MainAction.ImportBatchConfig(scanResult))
+            }
+        }
+    }
+
+    // دقیقاً همون importConfigLocal تو MainActivity.kt - از launchFileChooser ارث‌بری‌شده استفاده می‌کنه
+    private fun importFile() {
+        launchFileChooser { uri ->
+            if (uri == null) return@launchFileChooser
+            try {
+                contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader ->
+                    mainViewModel.onAction(MainAction.ImportBatchConfig(reader.readText()))
+                }
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "Failed to read content from URI", e)
+            }
+        }
+    }
 }
 
 @Composable
 private fun V2MApp(
     mainViewModel: MainViewModel,
     onToggleConnection: () -> Unit,
-    onImportClipboard: () -> Unit
+    onImportClipboard: () -> Unit,
+    onImportQrCode: () -> Unit,
+    onImportFile: () -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(BottomTab.HOME) }
     var selectedProtocol by remember { mutableStateOf(ConfigProtocol.ALL) }
@@ -158,11 +188,18 @@ private fun V2MApp(
             .map { it.toConfigItemUi(isSelected = it.guid == uiState.selectedGuid) }
     }
 
-    // سرور فعال برای کارت بالای صفحه‌ی خانه - بر اساس selectedGuid واقعی
     val activeServerItem = remember(realServers, uiState.selectedGuid) {
         realServers.firstOrNull { it.guid == uiState.selectedGuid }
     }
     val connectionState = if (uiState.isRunning) ConnectionState.CONNECTED else ConnectionState.DISCONNECTED
+
+    val moreMenuItems = remember(onImportClipboard, onImportQrCode, onImportFile) {
+        listOf(
+            MoreMenuItem("Import از کلیپ‌بورد", onImportClipboard),
+            MoreMenuItem("اسکن QR Code", onImportQrCode),
+            MoreMenuItem("Import از فایل", onImportFile)
+        )
+    }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -183,7 +220,6 @@ private fun V2MApp(
                         pingMs = ui.pingMs
                     )
                 },
-                // TODO: آمار واقعی دانلود/آپلود - هنوز تو MainUiState فیلدی براش نیست
                 downloadBytes = "—",
                 uploadBytes = "—",
                 profileCount = realServers.size,
@@ -207,13 +243,11 @@ private fun V2MApp(
                     mainViewModel.onAction(MainAction.SelectServer(config.id))
                     mainViewModel.onAction(MainAction.TestCurrentServer)
                 },
-                // فعلاً دکمه‌ی + هم همون کار Import از کلیپ‌بورد رو می‌کنه؛
-                // بعداً می‌تونیم یه صفحه‌ی جدا برای افزودن دستی/QR بسازیم
                 onAddConfig = onImportClipboard,
                 onOpenMenu = { /* TODO: باز کردن drawer یا منو */ },
                 onSearch = { /* TODO: باز کردن سرچ */ },
                 onFilter = { /* TODO: باز کردن فیلتر */ },
-                onMoreOptions = onImportClipboard
+                moreMenuItems = moreMenuItems
             )
 
             BottomTab.GROUPS -> GroupsPlaceholder(modifier = Modifier.padding(padding))

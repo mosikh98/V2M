@@ -15,6 +15,10 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,8 +29,6 @@ import com.v2ray.ang.ui.theme.*
 
 /**
  * پروتکل کانفیگ - برای تب‌بندی و فیلتر بالای صفحه.
- * این باید متناظر باشه با انواعی که ProfileManager/AngConfigManager
- * واقعی پروژه پشتیبانی می‌کنه (VLESS, VMess, Shadowsocks, Trojan, ...).
  */
 enum class ConfigProtocol(val label: String) {
     ALL("همه"),
@@ -37,7 +39,6 @@ enum class ConfigProtocol(val label: String) {
 
 /**
  * مدل نمایشی یک کانفیگ تو لیست.
- * باید از ProfileManager.getAllProfile() یا معادلش پر بشه.
  */
 data class ConfigItemUi(
     val id: String,
@@ -46,6 +47,14 @@ data class ConfigItemUi(
     val protocolLabel: String,
     val pingMs: Int,
     val isSelected: Boolean = false
+)
+
+/**
+ * یک آیتم تو منوی کشویی سه‌نقطه (مثلاً "Import از کلیپ‌بورد").
+ */
+data class MoreMenuItem(
+    val label: String,
+    val onClick: () -> Unit
 )
 
 @Composable
@@ -59,7 +68,7 @@ fun ProfileScreen(
     onOpenMenu: () -> Unit,
     onSearch: () -> Unit,
     onFilter: () -> Unit,
-    onMoreOptions: () -> Unit,
+    moreMenuItems: List<MoreMenuItem>,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -69,7 +78,7 @@ fun ProfileScreen(
                 onOpenMenu = onOpenMenu,
                 onSearch = onSearch,
                 onFilter = onFilter,
-                onMoreOptions = onMoreOptions
+                moreMenuItems = moreMenuItems
             )
         },
         floatingActionButton = {
@@ -119,8 +128,10 @@ private fun ProfileTopBar(
     onOpenMenu: () -> Unit,
     onSearch: () -> Unit,
     onFilter: () -> Unit,
-    onMoreOptions: () -> Unit
+    moreMenuItems: List<MoreMenuItem>
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
     TopAppBar(
         title = { Text("کانفیگ‌ها", style = MaterialTheme.typography.titleLarge) },
         navigationIcon = {
@@ -135,8 +146,25 @@ private fun ProfileTopBar(
             IconButton(onClick = onFilter) {
                 Icon(Icons.Filled.FilterList, contentDescription = "فیلتر", tint = TextPrimary)
             }
-            IconButton(onClick = onMoreOptions) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "بیشتر", tint = TextPrimary)
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "بیشتر", tint = TextPrimary)
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    containerColor = SurfaceDark
+                ) {
+                    moreMenuItems.forEach { item ->
+                        DropdownMenuItem(
+                            text = { Text(item.label, color = TextPrimary) },
+                            onClick = {
+                                menuExpanded = false
+                                item.onClick()
+                            }
+                        )
+                    }
+                }
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
