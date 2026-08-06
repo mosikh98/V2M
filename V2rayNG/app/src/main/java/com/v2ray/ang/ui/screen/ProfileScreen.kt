@@ -49,14 +49,6 @@ data class ConfigItemUi(
     val isSelected: Boolean = false
 )
 
-/**
- * یک آیتم تو منوی کشویی سه‌نقطه (مثلاً "Import از کلیپ‌بورد").
- */
-data class MoreMenuItem(
-    val label: String,
-    val onClick: () -> Unit
-)
-
 @Composable
 fun ProfileScreen(
     configs: List<ConfigItemUi>,
@@ -64,13 +56,17 @@ fun ProfileScreen(
     onProtocolSelected: (ConfigProtocol) -> Unit,
     onConfigClick: (ConfigItemUi) -> Unit,
     onConfigPing: (ConfigItemUi) -> Unit,
-    onAddConfig: () -> Unit,
     onOpenMenu: () -> Unit,
     onSearch: () -> Unit,
     onFilter: () -> Unit,
-    moreMenuItems: List<MoreMenuItem>,
+    // این دو تا اسلات مستقیماً منوهای واقعی ImportMenuContent/MoreMenuContent
+    // از خودِ v2rayNG رو می‌گیرن - همه‌ی گزینه‌های اصلی رو بدون بازنویسی داریم
+    importMenuContent: @Composable () -> Unit,
+    moreMenuContent: @Composable () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var importMenuExpanded by remember { mutableStateOf(false) }
+
     Scaffold(
         containerColor = BackgroundDark,
         topBar = {
@@ -78,16 +74,25 @@ fun ProfileScreen(
                 onOpenMenu = onOpenMenu,
                 onSearch = onSearch,
                 onFilter = onFilter,
-                moreMenuItems = moreMenuItems
+                moreMenuContent = moreMenuContent
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onAddConfig,
-                containerColor = PrimaryBlue,
-                contentColor = TextPrimary
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = "افزودن کانفیگ")
+            Box {
+                FloatingActionButton(
+                    onClick = { importMenuExpanded = true },
+                    containerColor = PrimaryBlue,
+                    contentColor = TextPrimary
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "افزودن کانفیگ")
+                }
+                DropdownMenu(
+                    expanded = importMenuExpanded,
+                    onDismissRequest = { importMenuExpanded = false },
+                    containerColor = SurfaceDark
+                ) {
+                    importMenuContent()
+                }
             }
         }
     ) { padding ->
@@ -128,7 +133,7 @@ private fun ProfileTopBar(
     onOpenMenu: () -> Unit,
     onSearch: () -> Unit,
     onFilter: () -> Unit,
-    moreMenuItems: List<MoreMenuItem>
+    moreMenuContent: @Composable () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -155,15 +160,7 @@ private fun ProfileTopBar(
                     onDismissRequest = { menuExpanded = false },
                     containerColor = SurfaceDark
                 ) {
-                    moreMenuItems.forEach { item ->
-                        DropdownMenuItem(
-                            text = { Text(item.label, color = TextPrimary) },
-                            onClick = {
-                                menuExpanded = false
-                                item.onClick()
-                            }
-                        )
-                    }
+                    moreMenuContent()
                 }
             }
         },

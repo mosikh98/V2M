@@ -1,6 +1,7 @@
 package com.v2ray.ang.ui
 
 import android.app.Activity.RESULT_OK
+import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,12 +15,14 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,20 +32,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.lifecycleScope
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.dto.entities.ProfileItem
+import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.extension.toastError
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.ui.base.HelperBaseComponentActivity
+import com.v2ray.ang.ui.main.ImportMenuContent
 import com.v2ray.ang.ui.main.MainAction
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.main.MainViewModel
+import com.v2ray.ang.ui.main.MoreMenuContent
 import com.v2ray.ang.ui.screen.ActiveServerUi
 import com.v2ray.ang.ui.screen.ConfigProtocol
 import com.v2ray.ang.ui.screen.ConnectionState
 import com.v2ray.ang.ui.screen.HomeScreen
-import com.v2ray.ang.ui.screen.MoreMenuItem
 import com.v2ray.ang.ui.screen.ProfileScreen
 import com.v2ray.ang.ui.screen.SettingScreen
 import com.v2ray.ang.ui.screen.demoAdvancedItems
@@ -50,6 +57,18 @@ import com.v2ray.ang.ui.screen.demoAppearanceItems
 import com.v2ray.ang.ui.screen.demoConnectionToggles
 import com.v2ray.ang.ui.screen.filterByProtocol
 import com.v2ray.ang.ui.screen.toConfigItemUi
+import com.v2ray.ang.ui.server.ProfileEditorResult
+import com.v2ray.ang.ui.server.ServerCustomConfigActivity
+import com.v2ray.ang.ui.server.ServerGroupActivity
+import com.v2ray.ang.ui.server.ServerHttpActivity
+import com.v2ray.ang.ui.server.ServerHysteria2Activity
+import com.v2ray.ang.ui.server.ServerProxyChainActivity
+import com.v2ray.ang.ui.server.ServerShadowsocksActivity
+import com.v2ray.ang.ui.server.ServerSocksActivity
+import com.v2ray.ang.ui.server.ServerTrojanActivity
+import com.v2ray.ang.ui.server.ServerVlessActivity
+import com.v2ray.ang.ui.server.ServerVmessActivity
+import com.v2ray.ang.ui.server.ServerWireguardActivity
 import com.v2ray.ang.ui.theme.BackgroundDark
 import com.v2ray.ang.ui.theme.PrimaryBlue
 import com.v2ray.ang.ui.theme.PrimaryBluePale
@@ -58,6 +77,8 @@ import com.v2ray.ang.ui.theme.TextDisabled
 import com.v2ray.ang.ui.theme.V2MTheme
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * تب‌های پایین صفحه. Groups فعلاً یه placeholder ساده‌ست چون
@@ -71,13 +92,14 @@ private enum class BottomTab(val label: String, val icon: ImageVector) {
 }
 
 /**
- * اکتیویتی اصلی UI جدید. از HelperBaseComponentActivity ارث می‌بره تا رایگان
- * launchQRCodeScanner و launchFileChooser رو داشته باشه (دقیقاً همون قابلیت‌هایی
- * که MainActivity قدیمی استفاده می‌کنه). دکمه‌ی سه‌نقطه‌ی صفحه‌ی کانفیگ‌ها
- * الان یه منوی کشویی واقعی با سه گزینه‌ست: کلیپ‌بورد، اسکن QR، فایل.
+ * اکتیویتی اصلی UI جدید. الان کاملاً هم‌ارز MainActivity قدیمیه:
+ * - دکمه‌ی + همون ImportMenuContent واقعی رو داره (QR/کلیپ‌بورد/فایل/دستی برای هر پروتکل)
+ * - دکمه‌ی سه‌نقطه همون MoreMenuContent واقعی رو داره (حذف همه/تکراری/نامعتبر، export،
+ *   locate، sort، ping همه، real ping همه، آپدیت اشتراک‌ها، restart سرویس)
+ * - دکمه‌ی Connect منطق واقعی VpnService.prepare + LauncherManager رو داره
  *
  * TODO باقی‌مونده: پرچم سرور فعال از SpeedtestManager.getRemoteIPInfo، آمار زنده‌ی
- * دانلود/آپلود، و وصل کردن سوییچ‌های تنظیمات.
+ * دانلود/آپلود، منوی share/edit/delete برای هر آیتم لیست، و وصل کردن سوییچ‌های تنظیمات.
  */
 class ComposeMainActivity : HelperBaseComponentActivity() {
 
@@ -85,16 +107,31 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
         MainViewModel.Factory(application, MainRepository(application as AngApplication))
     }
 
-    // دقیقاً همون requestVpnPermission تو MainActivity.kt
     private val requestVpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             if (it.resultCode == RESULT_OK) startV2Ray()
         }
 
+    private val profileEditorLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != RESULT_OK) return@registerForActivityResult
+            val data = result.data ?: return@registerForActivityResult
+            val action = data.getStringExtra(ProfileEditorResult.EXTRA_ACTION)
+                ?: return@registerForActivityResult
+            if (action != ProfileEditorResult.ACTION_SAVED &&
+                action != ProfileEditorResult.ACTION_DELETED
+            ) return@registerForActivityResult
+            val restartService = data.getBooleanExtra(
+                ProfileEditorResult.EXTRA_RESTART_SERVICE, false
+            )
+            mainViewModel.onAction(MainAction.RefreshGroups)
+            if (restartService && mainViewModel.uiState.value.isRunning) {
+                restartV2Ray()
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // این کلاس پایه خودش setContent رو صدا می‌زنه (از طریق ScreenContent زیر)،
-        // پس فقط کافیه دیتای اولیه رو لود کنیم - دقیقاً کاری که MainActivity.onCreate می‌کنه
         mainViewModel.onAction(MainAction.Initialize)
     }
 
@@ -104,14 +141,35 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
             V2MApp(
                 mainViewModel = mainViewModel,
                 onToggleConnection = { handleFabAction() },
-                onImportClipboard = { importClipboard() },
-                onImportQrCode = { importQrCode() },
-                onImportFile = { importFile() }
+                onAction = { handleMainAction(it) }
             )
         }
     }
 
-    // دقیقاً همون handleFabAction تو MainActivity.kt
+    /**
+     * دیسپچر مرکزی اکشن‌ها - دقیقاً همون نقشی که تو MainActivity.ScreenContent's
+     * onAction lambda هست: بعضی اکشن‌ها رو خودِ Activity هندل می‌کنه (چون نیاز به
+     * دسترسی سیستمی مثل کلیپ‌بورد/دوربین/فایل دارن)، بقیه رو مستقیم به ViewModel می‌ده.
+     */
+    private fun handleMainAction(action: MainAction) {
+        when (action) {
+            MainAction.ToggleService -> handleFabAction()
+            MainAction.TestCurrentServer -> {
+                if (mainViewModel.uiState.value.isRunning) {
+                    mainViewModel.testCurrentServerRealPing()
+                }
+            }
+            MainAction.ImportQRcode -> importQrCode()
+            MainAction.ImportClipboard -> importClipboard()
+            MainAction.ImportConfigLocal -> importFile()
+            is MainAction.ImportManually -> importManually(action.type)
+            MainAction.RestartService -> restartV2Ray()
+            MainAction.LocateSelectedServer -> mainViewModel.triggerLocateSelectedServer()
+            is MainAction.EditServer -> editServer(action.guid, action.profile)
+            else -> mainViewModel.onAction(action)
+        }
+    }
+
     private fun handleFabAction() {
         if (mainViewModel.uiState.value.isRunning) {
             LauncherManager.stopService(this)
@@ -123,7 +181,6 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
         }
     }
 
-    // دقیقاً همون startV2Ray تو MainActivity.kt (بدون بخش مجوز شبکه‌ی محلی که پیچیدگی اضافه داره)
     private fun startV2Ray() {
         if (mainViewModel.uiState.value.selectedGuid.isNullOrEmpty()) {
             toastError("یک کانفیگ رو اول از تب کانفیگ‌ها انتخاب کن")
@@ -132,7 +189,14 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
         LauncherManager.startService(this)
     }
 
-    // دقیقاً همون importClipboard تو MainActivity.kt
+    private fun restartV2Ray() {
+        if (mainViewModel.uiState.value.isRunning) LauncherManager.stopService(this)
+        lifecycleScope.launch {
+            delay(500)
+            startV2Ray()
+        }
+    }
+
     private fun importClipboard() {
         try {
             val text = Utils.getClipboard(this)
@@ -142,7 +206,6 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
         }
     }
 
-    // دقیقاً همون importQRcode تو MainActivity.kt - از launchQRCodeScanner ارث‌بری‌شده استفاده می‌کنه
     private fun importQrCode() {
         launchQRCodeScanner { scanResult ->
             if (scanResult != null) {
@@ -151,7 +214,6 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
         }
     }
 
-    // دقیقاً همون importConfigLocal تو MainActivity.kt - از launchFileChooser ارث‌بری‌شده استفاده می‌کنه
     private fun importFile() {
         launchFileChooser { uri ->
             if (uri == null) return@launchFileChooser
@@ -164,18 +226,65 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
             }
         }
     }
+
+    private fun importManually(createConfigType: Int) {
+        val intent = when (createConfigType) {
+            EConfigType.POLICYGROUP.value -> Intent(this, ServerGroupActivity::class.java)
+            EConfigType.PROXYCHAIN.value -> Intent(this, ServerProxyChainActivity::class.java)
+            EConfigType.VMESS.value -> Intent(this, ServerVmessActivity::class.java)
+            EConfigType.VLESS.value -> Intent(this, ServerVlessActivity::class.java)
+            EConfigType.SHADOWSOCKS.value -> Intent(this, ServerShadowsocksActivity::class.java)
+            EConfigType.SOCKS.value -> Intent(this, ServerSocksActivity::class.java)
+            EConfigType.HTTP.value -> Intent(this, ServerHttpActivity::class.java)
+            EConfigType.TROJAN.value -> Intent(this, ServerTrojanActivity::class.java)
+            EConfigType.WIREGUARD.value -> Intent(this, ServerWireguardActivity::class.java)
+            EConfigType.HYSTERIA2.value -> Intent(this, ServerHysteria2Activity::class.java)
+            else -> Intent(this, ServerHttpActivity::class.java).apply {
+                putExtra("createConfigType", createConfigType)
+            }
+        }.apply {
+            putExtra("subscriptionId", mainViewModel.uiState.value.selectedGroupId)
+        }
+        profileEditorLauncher.launch(intent)
+    }
+
+    private fun editServer(guid: String, profile: ProfileItem) {
+        val activityClass = when (profile.configType) {
+            EConfigType.CUSTOM -> ServerCustomConfigActivity::class.java
+            EConfigType.POLICYGROUP -> ServerGroupActivity::class.java
+            EConfigType.PROXYCHAIN -> ServerProxyChainActivity::class.java
+            EConfigType.VMESS -> ServerVmessActivity::class.java
+            EConfigType.VLESS -> ServerVlessActivity::class.java
+            EConfigType.SHADOWSOCKS -> ServerShadowsocksActivity::class.java
+            EConfigType.SOCKS -> ServerSocksActivity::class.java
+            EConfigType.HTTP -> ServerHttpActivity::class.java
+            EConfigType.TROJAN -> ServerTrojanActivity::class.java
+            EConfigType.WIREGUARD -> ServerWireguardActivity::class.java
+            EConfigType.HYSTERIA2 -> ServerHysteria2Activity::class.java
+            else -> ServerHttpActivity::class.java
+        }
+        val intent = Intent(this, activityClass).apply {
+            putExtra("guid", guid)
+            putExtra("isRunning", mainViewModel.uiState.value.isRunning)
+            putExtra("createConfigType", profile.configType.value)
+            putExtra("subscriptionId", mainViewModel.uiState.value.selectedGroupId)
+        }
+        profileEditorLauncher.launch(intent)
+    }
 }
 
 @Composable
 private fun V2MApp(
     mainViewModel: MainViewModel,
     onToggleConnection: () -> Unit,
-    onImportClipboard: () -> Unit,
-    onImportQrCode: () -> Unit,
-    onImportFile: () -> Unit
+    onAction: (MainAction) -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(BottomTab.HOME) }
     var selectedProtocol by remember { mutableStateOf(ConfigProtocol.ALL) }
+
+    var showDelAllConfirm by remember { mutableStateOf(false) }
+    var showDelDuplicateConfirm by remember { mutableStateOf(false) }
+    var showDelInvalidConfirm by remember { mutableStateOf(false) }
 
     val uiState by mainViewModel.uiState.collectAsState()
     val realServers by mainViewModel
@@ -193,11 +302,25 @@ private fun V2MApp(
     }
     val connectionState = if (uiState.isRunning) ConnectionState.CONNECTED else ConnectionState.DISCONNECTED
 
-    val moreMenuItems = remember(onImportClipboard, onImportQrCode, onImportFile) {
-        listOf(
-            MoreMenuItem("Import از کلیپ‌بورد", onImportClipboard),
-            MoreMenuItem("اسکن QR Code", onImportQrCode),
-            MoreMenuItem("Import از فایل", onImportFile)
+    if (showDelAllConfirm) {
+        ConfirmDialog(
+            text = "همه‌ی کانفیگ‌ها حذف بشن؟",
+            onConfirm = { showDelAllConfirm = false; onAction(MainAction.RemoveAllServers) },
+            onDismiss = { showDelAllConfirm = false }
+        )
+    }
+    if (showDelDuplicateConfirm) {
+        ConfirmDialog(
+            text = "کانفیگ‌های تکراری حذف بشن؟",
+            onConfirm = { showDelDuplicateConfirm = false; onAction(MainAction.RemoveDuplicateServers) },
+            onDismiss = { showDelDuplicateConfirm = false }
+        )
+    }
+    if (showDelInvalidConfirm) {
+        ConfirmDialog(
+            text = "کانفیگ‌های نامعتبر حذف بشن؟",
+            onConfirm = { showDelInvalidConfirm = false; onAction(MainAction.RemoveInvalidServers) },
+            onDismiss = { showDelInvalidConfirm = false }
         )
     }
 
@@ -237,17 +360,24 @@ private fun V2MApp(
                 selectedProtocol = selectedProtocol,
                 onProtocolSelected = { selectedProtocol = it },
                 onConfigClick = { config ->
-                    mainViewModel.onAction(MainAction.SelectServer(config.id))
+                    onAction(MainAction.SelectServer(config.id))
                 },
                 onConfigPing = { config ->
-                    mainViewModel.onAction(MainAction.SelectServer(config.id))
-                    mainViewModel.onAction(MainAction.TestCurrentServer)
+                    onAction(MainAction.SelectServer(config.id))
+                    onAction(MainAction.TestCurrentServer)
                 },
-                onAddConfig = onImportClipboard,
                 onOpenMenu = { /* TODO: باز کردن drawer یا منو */ },
                 onSearch = { /* TODO: باز کردن سرچ */ },
                 onFilter = { /* TODO: باز کردن فیلتر */ },
-                moreMenuItems = moreMenuItems
+                importMenuContent = { ImportMenuContent(onAction = onAction) },
+                moreMenuContent = {
+                    MoreMenuContent(
+                        onAction = onAction,
+                        onDelAllConfig = { showDelAllConfirm = true },
+                        onDelDuplicateConfig = { showDelDuplicateConfirm = true },
+                        onDelInvalidConfig = { showDelInvalidConfirm = true }
+                    )
+                }
             )
 
             BottomTab.GROUPS -> GroupsPlaceholder(modifier = Modifier.padding(padding))
@@ -263,6 +393,17 @@ private fun V2MApp(
             )
         }
     }
+}
+
+@Composable
+private fun ConfirmDialog(text: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("تأیید") },
+        text = { Text(text) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("تأیید") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
 }
 
 @Composable
