@@ -6,9 +6,6 @@ import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Group
@@ -29,7 +26,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.lifecycleScope
@@ -49,6 +45,8 @@ import com.v2ray.ang.ui.main.MoreMenuContent
 import com.v2ray.ang.ui.screen.ActiveServerUi
 import com.v2ray.ang.ui.screen.ConfigProtocol
 import com.v2ray.ang.ui.screen.ConnectionState
+import com.v2ray.ang.ui.screen.GroupItemUi
+import com.v2ray.ang.ui.screen.GroupsScreen
 import com.v2ray.ang.ui.screen.HomeScreen
 import com.v2ray.ang.ui.screen.ProfileScreen
 import com.v2ray.ang.ui.screen.SettingScreen
@@ -81,8 +79,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * تب‌های پایین صفحه. Groups فعلاً یه placeholder ساده‌ست چون
- * صفحه‌ی جدا براش نساختیم (می‌تونیم بعداً اضافه کنیم).
+ * تب‌های پایین صفحه.
  */
 private enum class BottomTab(val label: String, val icon: ImageVector) {
     HOME("خانه", Icons.Filled.Home),
@@ -97,6 +94,7 @@ private enum class BottomTab(val label: String, val icon: ImageVector) {
  * - دکمه‌ی سه‌نقطه همون MoreMenuContent واقعی رو داره (حذف همه/تکراری/نامعتبر، export،
  *   locate، sort، ping همه، real ping همه، آپدیت اشتراک‌ها، restart سرویس)
  * - دکمه‌ی Connect منطق واقعی VpnService.prepare + LauncherManager رو داره
+ * - صفحه‌ی گروه‌ها الان لیست واقعی اشتراک‌هاست
  *
  * TODO باقی‌مونده: پرچم سرور فعال از SpeedtestManager.getRemoteIPInfo، آمار زنده‌ی
  * دانلود/آپلود، منوی share/edit/delete برای هر آیتم لیست، و وصل کردن سوییچ‌های تنظیمات.
@@ -146,11 +144,6 @@ class ComposeMainActivity : HelperBaseComponentActivity() {
         }
     }
 
-    /**
-     * دیسپچر مرکزی اکشن‌ها - دقیقاً همون نقشی که تو MainActivity.ScreenContent's
-     * onAction lambda هست: بعضی اکشن‌ها رو خودِ Activity هندل می‌کنه (چون نیاز به
-     * دسترسی سیستمی مثل کلیپ‌بورد/دوربین/فایل دارن)، بقیه رو مستقیم به ViewModel می‌ده.
-     */
     private fun handleMainAction(action: MainAction) {
         when (action) {
             MainAction.ToggleService -> handleFabAction()
@@ -380,7 +373,21 @@ private fun V2MApp(
                 }
             )
 
-            BottomTab.GROUPS -> GroupsPlaceholder(modifier = Modifier.padding(padding))
+            BottomTab.GROUPS -> GroupsScreen(
+                modifier = Modifier.padding(padding),
+                groups = uiState.groups.map { group ->
+                    GroupItemUi(
+                        id = group.id,
+                        remarks = group.remarks,
+                        isSelected = group.id == uiState.selectedGroupId
+                    )
+                },
+                onGroupClick = { group ->
+                    onAction(MainAction.SelectGroup(group.id))
+                    selectedTab = BottomTab.PROFILES
+                },
+                onOpenMenu = { /* TODO: باز کردن drawer یا منو */ }
+            )
 
             BottomTab.SETTINGS -> SettingScreen(
                 modifier = Modifier.padding(padding),
@@ -424,21 +431,5 @@ private fun V2MBottomBar(selectedTab: BottomTab, onTabSelected: (BottomTab) -> U
                 )
             )
         }
-    }
-}
-
-/**
- * جایگزین موقت تا صفحه‌ی واقعی گروه‌ها (ServerGroupActivity) رو به Compose
- * وصل کنیم یا یه GroupsScreen.kt جدا بسازیم.
- */
-@Composable
-private fun GroupsPlaceholder(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(BackgroundDark),
-        contentAlignment = Alignment.Center
-    ) {
-        Text("صفحه‌ی گروه‌ها هنوز ساخته نشده", color = TextDisabled)
     }
 }
